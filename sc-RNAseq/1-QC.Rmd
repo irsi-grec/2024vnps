@@ -1,0 +1,968 @@
+---
+title: "Filtering single cell sequencing data"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, include = FALSE, cache = FALSE}
+rm(list = ls())
+gc()
+
+# Set an output hook to split st_read output so it doesn't extend beyond line width
+knitr::knit_hooks$set(
+  
+  # modify the output
+  output = function(x, options){
+    
+    # Split in lines
+    lines <- unlist(strsplit(x, split = "\n"))
+    
+    #--------------------------------------------------------------------------*
+    # modify the lines we expect to bleed out of the margins ----
+    #--------------------------------------------------------------------------*
+    
+    # For the dsn specification
+    lines <- gsub(
+      pattern = "' ",
+      replacement = "'\n## \t",
+      x = lines
+    )
+    lines <- unlist(sapply(lines, strsplit, split = "\n"))
+    
+    # For the dsn file path
+    lines <- ifelse(
+      test = grepl("from data source ", lines),
+      # Adjust so segments are split in /
+      yes = gsub(
+        pattern = "/([^/]*)\n",
+        replacement = "/\n## \t\\1",
+        # Split in fixed width segments
+        x = gsub(
+          pattern = "(.{,65})",
+          replacement = "\\1\n",
+          x = lines
+        )
+      ),
+      no = lines
+    )
+    
+    # For the proj4 string specifications
+    lines <- ifelse(
+      test = grepl("proj4string:", lines),
+      yes = gsub(
+        pattern = "[+]",
+        replacement = "\n## \t+",
+        x = lines
+      ),
+      no = lines
+    )
+    
+    # bind the lines
+    x <- paste(
+      "```",
+      paste0(lines, collapse = "\n"),
+      "```",
+      sep = "\n"
+    )
+    
+    return(x)
+  }
+)
+
+knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 60), tidy = TRUE, strip.white = FALSE, echo = TRUE)
+knitr::opts_chunk$set(error = TRUE)
+```
+
+# Before filtering
+
+```{r message = FALSE, warning = FALSE}
+library(dplyr)
+library(Seurat)
+library(stringr)
+library(ggplot2)
+library(cowplot)
+library(ggExtra)
+
+setwd("~/Documents/VNP_project/")
+
+datafolder <- file.path(getwd(), "RDS_objects")
+qcfolder <- file.path(getwd(), "output", "QC")
+
+if (!dir.exists(file.path(datafolder))) {
+  dir.create(file.path(datafolder), recursive = T)
+}
+
+if (!dir.exists(file.path(outfolder))) {
+  dir.create(file.path(outfolder), recursive = T)
+}
+```
+
+```{r}
+ids <- list.dirs("~/Documents/VNP_project/cellranger/", recursive = F, full.names = F)
+
+d10x.data <- sapply(ids, function(i){
+  d10x <- Read10X(data.dir = paste0("~/Documents/VNP_project/cellranger/", i, "/filtered_feature_bc_matrix/"), gene.column = 2)
+  colnames(d10x) <- paste(sapply(strsplit(colnames(d10x), split="-"), '[[', 1L), i, sep = "-")
+  d10x
+})
+```
+
+Filtered feature matrices from cellranger are used to create a Seurat Object named `experiment.aggregate`.
+
+```{r}
+experiment.data <- do.call("cbind", d10x.data)
+
+experiment.aggregate <- CreateSeuratObject(
+  experiment.data,
+  min.cells = 3,
+  min.features = 200,
+  names.field = 2,
+  names.delim = "\\-")
+
+experiment.aggregate
+```
+
+Summary overview of the metadata:
+
+```{r}
+# The [[ operator can add columns to object metadata. This is a great place to stash QC stats
+
+experiment.aggregate[["percent.mt"]] <- PercentageFeatureSet(experiment.aggregate, pattern = "^MT-")
+
+meta = str_split_fixed(experiment.aggregate@meta.data$orig.ident, "_", 6)
+experiment.aggregate[["ID"]] <- meta[,1]
+experiment.aggregate[["group"]] <- meta[,2]
+experiment.aggregate[["gender"]] <- meta[,3]
+experiment.aggregate[["mode"]] <- meta[,4]
+experiment.aggregate[["origin"]] <- meta[,5]
+experiment.aggregate[["match"]] <- meta[,6]
+
+summary(meta[,1:6])
+```
+
+- ID vs origin
+```{r}
+table(meta[,1], meta[,5])
+```
+
+- group vs origin
+```{r}
+table(meta[,2], meta[,5])
+```
+
+- ID vs gender
+```{r}
+table(meta[,1], meta[,3])
+```
+
+## QC metrics
+
+### Violing plots
+
+```{r, fig.height=18, fig.width=18}
+# Visualize QC metrics as a violin plot
+p <- VlnPlot(
+  experiment.aggregate, 
+  c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
+  ncol = 1,
+  group.by = "ID",
+  pt.size = -1)
+p
+
+pdf(file.path(qcfolder, "QC_by_individually.pdf"))
+p
+dev.off()
+```
+
+- QC by group
+```{r, fig.height=16, fig.width=22}
+# Visualize QC metrics as a violin plot
+
+p1 <- VlnPlot(
+  experiment.aggregate, 
+  c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+  ncol = 3,
+  group.by = "group",
+  pt.size = -1)
+p1
+
+pdf(file.path(qcfolder, "QC_by_group.pdf"))
+p1
+dev.off()
+```
+
+- QC by gender
+```{r, fig.height=16, fig.width=22}
+p2 <- VlnPlot(
+  experiment.aggregate, 
+  c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+  ncol = 3,
+  group.by = "gender",
+  pt.size = -1)
+p2
+
+pdf(file.path(qcfolder, "QC_by_gender.pdf"))
+p2
+dev.off()
+```
+
+- QC by match
+```{r, fig.height=16, fig.width=22}
+p3 <- VlnPlot(
+  experiment.aggregate, 
+  c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
+  ncol = 3,
+  group.by = "match",
+  pt.size = -1)
+p3
+
+pdf(file.path(qcfolder, "QC_by_match.pdf"))
+p3
+dev.off()
+```
+
+- QC by origin
+```{r, fig.height=16, fig.width=22}
+p4 <- VlnPlot(
+  experiment.aggregate, 
+  c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+  ncol = 3,
+  group.by = "origin",
+  pt.size = -1)
+p4
+
+pdf(file.path(qcfolder, "QC_by_origin.pdf"))
+p4
+dev.off()
+```
+
+### Scatter plot of features
+
+```{r, fig.height=28, fig.width=10}
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+
+plot1 <- FeatureScatter(
+  experiment.aggregate,
+  feature1 = "nCount_RNA",
+  feature2 = "percent.mt",
+  group.by = "ID",
+  pt.size = 0.05)
+
+plot2 <- FeatureScatter(
+  experiment.aggregate,
+  feature1 = "nCount_RNA",
+  feature2 = "nFeature_RNA",
+  group.by = "ID",
+  pt.size = 0.05)
+
+plot3 <- FeatureScatter(
+  experiment.aggregate,
+  feature1 = "nFeature_RNA",
+  feature2 = "percent.mt",
+  group.by = "ID",
+  pt.size = 0.05)
+
+pFeat <- CombinePlots(
+  plots = list(plot1, plot2, plot3),
+  ncol = 1)
+pFeat
+
+pdf(file.path(qcfolder, "QC_scatter.pdf"))
+pFeat
+dev.off()
+```
+
+```{r echo = TRUE, fig.height=9, fig.width=10, message = FALSE, warning = FALSE}
+mid <- 3
+
+p <- ggplot(experiment.aggregate@meta.data, aes(x = nCount_RNA, y = nFeature_RNA)) +
+  geom_point(aes(color = percent.mt), size = 1) +
+  scale_color_gradient2(midpoint = mid, low = "black", mid = "grey", high ="red") +
+  scale_y_continuous(trans = "log10") +
+  scale_x_continuous(trans = "log10") +
+  theme_cowplot(12) +
+  geom_vline(xintercept = 1000, linetype = 3) +
+  geom_hline(yintercept = 500, linetype = 3) 
+p
+
+pdf(file.path(qcfolder, "QC_scatter_all.pdf"))
+ggMarginal(p, type = "densigram", size = 10)
+p
+dev.off()
+```
+
+```{r echo = TRUE, fig.height=10, fig.width=10, message = FALSE, warning = FALSE}
+mid <- 3
+
+p <- ggplot(experiment.aggregate@meta.data, aes(x = nCount_RNA, y = nFeature_RNA)) +
+  geom_point(aes(color = percent.mt), size = 1) +
+  scale_color_gradient2(midpoint = mid, low = "black", mid = "grey", high ="red") +
+  scale_y_continuous(trans = "log10") +
+  scale_x_continuous(trans = "log10") +
+  theme_cowplot(12) +
+  facet_wrap(~ID, ncol = 3) +
+  geom_vline(xintercept = 2000, linetype = 3) +
+  geom_hline(yintercept = 700, linetype = 3)
+p
+
+pdf(file.path(qcfolder, "QC_scatter_individually.pdf"))
+p
+dev.off()
+```
+
+# After filtering
+
+The thresholds are taken based on the bimodal distribution of features in marginal plots. 
+
+Filtered `experiment.aggregate` is named as `experiment.aggregate_filtered`.
+
+```{r, include = TRUE}
+experiment.aggregate_filtered <- subset(experiment.aggregate, subset = nFeature_RNA > 500 & nCount_RNA > 1000 & percent.mt < 5)
+experiment.aggregate_filtered
+```
+
+## Scatter plot of QC features
+
+Testing different combination of parameters.
+
+```{r echo = TRUE, fig.height=9, fig.width=10, message = FALSE, warning = FALSE}
+p <- ggplot(experiment.aggregate_filtered@meta.data, aes(x = nCount_RNA, y = nFeature_RNA)) +
+  geom_point(aes(color = percent.mt), size = 1) +
+  scale_color_gradient2(midpoint = mid, low = "black", mid = "white", high ="red") +
+  scale_y_continuous(trans = "log10") +
+  scale_x_continuous(trans = "log10") +
+  theme_cowplot(12)
+ggMarginal(p, type = "densigram", size = 10)
+```
+
+```{r echo = TRUE, fig.height=10, fig.width=10, message = FALSE, warning = FALSE}
+mid <- 25
+
+p <- ggplot(experiment.aggregate_filtered@meta.data, aes(x = nCount_RNA, y = nFeature_RNA)) +
+  geom_point(aes(color = percent.mt), size = 1) +
+  scale_color_gradient2(midpoint = mid, low = "black", mid = "white", high ="red") + scale_y_continuous(trans = "log10") +
+  scale_x_continuous(trans = "log10") +
+  theme_cowplot(12) +
+  facet_wrap(~orig.ident, ncol = 3) +
+  geom_vline(xintercept = 2000, linetype = 3) +
+  geom_hline(yintercept = 700, linetype = 3)
+p
+```
+
+```{r echo = TRUE, fig.height=5, fig.width=10, message = FALSE, warning = FALSE}
+mid <- 25
+
+p <- ggplot(experiment.aggregate_filtered@meta.data, aes(x = nCount_RNA, y = nFeature_RNA)) +
+  geom_point(aes(color = percent.mt), size = 1) +
+  scale_color_gradient2(midpoint = mid, low = "black", mid = "white", high ="red") + 
+  scale_y_continuous(trans = "log10") +
+  scale_x_continuous(trans = "log10") +
+  theme_cowplot(12) +
+  facet_wrap(~tissue, ncol = 3) +
+  geom_vline(xintercept = 200, linetype = 3) +
+  geom_hline(yintercept = 700, linetype = 3)
+p
+```
+
+```{r echo = TRUE, fig.height=5, fig.width=10, message = FALSE, warning = FALSE}
+mid <- 25
+
+p <- ggplot(experiment.aggregate_filtered@meta.data, aes(x = nCount_RNA, y = nFeature_RNA)) +
+  geom_point(aes(color = percent.mt), size = 1) +
+  scale_color_gradient2(midpoint = mid, low = "black", mid = "white", high ="red") +
+  scale_y_continuous(trans = "log10") +
+  scale_x_continuous(trans = "log10") +
+  theme_cowplot(12) +
+  facet_wrap(~age, ncol = 3) +
+  geom_vline(xintercept = 2000, linetype = 3) +
+  geom_hline(yintercept = 700, linetype = 3)
+p
+```
+
+```{r echo = TRUE, fig.height=5, fig.width=12, message = FALSE, warning = FALSE}
+mid <- 25
+
+p <- ggplot(experiment.aggregate_filtered@meta.data, aes(x = nCount_RNA, y = nFeature_RNA)) +
+  geom_point(aes(color = percent.mt), size = 1) +
+  scale_color_gradient2(midpoint = mid, low = "black", mid = "white", high ="red") +
+  scale_y_continuous(trans = "log10") +
+  scale_x_continuous(trans = "log10") +
+  theme_cowplot(12) +
+  facet_wrap(~rep, ncol = 3) +
+  geom_vline(xintercept = 2000, linetype = 3) +
+  geom_hline(yintercept = 700, linetype = 3)
+p
+```
+
+## Violin plots
+
+```{r, fig.height=18, fig.width=18}
+# Visualize QC metrics as a violin plot
+VlnPlot(experiment.aggregate_filtered, 
+        c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
+        ncol = 1, group.by = "ID", pt.size = 0.005)
+```
+
+- Split by disease, gender and ID
+
+```{r, fig.height=16, fig.width=22}
+# Visualize QC metrics as a violin plot
+p1 <- VlnPlot(experiment.aggregate_filtered, 
+              c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
+              ncol = 3, group.by = "disease", pt.size = 0.005)
+
+p2 <- VlnPlot(experiment.aggregate_filtered, 
+              c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
+              ncol = 3, group.by = "gender", pt.size = 0.005)
+
+p3 <- VlnPlot(experiment.aggregate_filtered, 
+              c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
+              ncol = 3, group.by = "PatientID", pt.size = 0.005)
+
+CombinePlots(plots = list(p1, p2, p3), ncol = 1)
+```
+
+## Scatter plots
+
+FeatureScatter is typically used to visualize feature-feature relationships, but can be used for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+
+- Group by `orig.idnt`
+```{r, fig.height=10, fig.width=28}
+plot1 <- FeatureScatter(
+  experiment.aggregate_filtered,
+  feature1 = "nCount_RNA",
+  feature2 = "percent.mt",
+  group.by = "orig.ident",
+  pt.size = 0.05)
+
+plot2 <- FeatureScatter(
+  experiment.aggregate_filtered,
+  feature1 = "nCount_RNA",
+  feature2 = "nFeature_RNA",
+  group.by = "orig.ident",
+  pt.size = 0.05)
+
+plot3 <- FeatureScatter(
+  experiment.aggregate_filtered,
+  feature1 = "nFeature_RNA",
+  feature2 = "percent.mt",
+  group.by = "orig.ident",
+  pt.size = 0.05)
+
+CombinePlots(plots = list(plot1, plot2, plot3), ncol = 3)
+```
+
+- Group by disease
+```{r, fig.height=10, fig.width=28}
+plot1 <- FeatureScatter(experiment.aggregate_filtered,
+                        feature1 = "nCount_RNA",
+                        feature2 = "percent.mt",
+                        group.by = "disease",
+                        pt.size = 0.05)
+
+plot2 <- FeatureScatter(experiment.aggregate_filtered,
+                        feature1 = "nCount_RNA",
+                        feature2 = "nFeature_RNA",
+                        group.by = "disease",
+                        pt.size = 0.05)
+
+plot3 <- FeatureScatter(experiment.aggregate_filtered,
+                        feature1 = "nFeature_RNA",
+                        feature2 = "percent.mt",
+                        group.by = "disease",
+                        pt.size = 0.05)
+
+CombinePlots(plots = list(plot1, plot2, plot3), ncol = 3)
+```
+
+- Group by gender
+```{r, fig.height=10, fig.width=28}
+plot1 <- FeatureScatter(experiment.aggregate_filtered,
+                        feature1 = "nCount_RNA",
+                        feature2 = "percent.mt",
+                        group.by = "gender",
+                        pt.size = 0.05)
+
+plot2 <- FeatureScatter(experiment.aggregate_filtered,
+                        feature1 = "nCount_RNA",
+                        feature2 = "nFeature_RNA",
+                        group.by = "gender",
+                        pt.size = 0.05)
+
+plot3 <- FeatureScatter(experiment.aggregate_filtered,
+                        feature1 = "nFeature_RNA",
+                        feature2 = "percent.mt",
+                        group.by = "gender",
+                        pt.size = 0.05)
+
+CombinePlots(plots = list(plot1, plot2, plot3), ncol = 3)
+```
+
+- Group by ID
+```{r, fig.height=10, fig.width=28}
+plot1 <- FeatureScatter(
+  experiment.aggregate_filtered, feature1 = "nCount_RNA", feature2 = "percent.mt", group.by = "PatientID", pt.size = 0.05)
+
+plot2 <- FeatureScatter(
+  experiment.aggregate_filtered,
+  feature1 = "nCount_RNA",
+  feature2 = "nFeature_RNA",
+  group.by = "PatientID",
+  pt.size = 0.05)
+
+plot3 <- FeatureScatter(
+  experiment.aggregate_filtered,
+  feature1 = "nFeature_RNA",
+  feature2 = "percent.mt",
+  group.by = "PatientID",
+  pt.size = 0.05)
+
+CombinePlots(plots = list(plot1, plot2, plot3), ncol = 3)
+```
+
+# Save output
+
+```{r eval = FALSE}
+saveRDS(experiment.aggregate_filtered, file.path(datafolder, "experiment.aggregate_filtered.RDS"), compress = TRUE)
+saveRDS(experiment.aggregate, file.path(datafolder, "experiment.aggregate.RDS"), compress = TRUE)
+```
+
+Raw Seurat Object saved at:
+`r file.path(datafolder, "experiment.aggregate.RDS")`
+
+Filtered data saved at:
+`r file.path(datafolder, "experiment.aggregate_filtered.RDS")`
+
+# Process data
+
+```{r}
+table(experiment.aggregate_filtered$group)
+```
+
+1. Generate a list with two data sets: c(ds1, ds2)
+```{r}
+H.list <- SplitObject(experiment.aggregate_filtered, split.by = "ID")
+```
+
+2. SCTransform each dataset (ds1 y ds2)
+```{r}
+plan("multiprocess", workers = 2)
+options(future.globals.maxSize= 10485760000)
+
+H.list <- lapply(X = H.list, FUN = function(x) {
+  x <- SCTransform(
+    x,
+    vars.to.regress = c("percent.mt"),
+    verbose = FALSE)
+})
+```
+
+3. SelectIntegrationFeatures to extract anchor features (Note: the higher the number of features, the better will be the results)
+```{r}
+H.features <- SelectIntegrationFeatures(
+  object.list = H.list,
+  nfeatures = 2000)
+```
+
+4. PrepSCTIntegration on the list and anchor features (source vignette)[https://satijalab.org/seurat/v3.0/future_vignette.html]
+```{r}
+H.list <- PrepSCTIntegration(
+  object.list = H.list,
+  anchor.features = H.features,
+  verbose = FALSE)
+```
+
+5. FindIntegrationAnchors (method = SCT, importante)
+```{r}
+H.anchors <- FindIntegrationAnchors(
+  object.list = H.list,
+  normalization.method = "SCT",
+  anchor.features = H.features, reference = 1)
+```
+
+6. IntegrateDataset (method = SCT)
+```{r}
+H.integrated <- IntegrateData(
+  anchorset = H.anchors,
+  normalization.method = "SCT",
+  dims = 1:30,
+  verbose = FALSE)
+```
+
+7. t-SNE and Clustering
+```{r}
+PCA <- RunPCA(
+  H.integrated,
+  npcs = 30,
+  verbose = FALSE)
+
+UMAP <- RunUMAP(
+  PCA,
+  reduction = "pca",
+  dims = 1:20)
+
+Neighbors <- FindNeighbors(
+  UMAP,
+  reduction = "pca",
+  dims = 1:20)
+
+Clusters <- FindClusters(
+  Neighbors,
+  resolution = 0.5)
+
+Clusters@active.assay <-"RNA"
+Clusters <- NormalizeData(Clusters)
+```
+
+```{r}
+new.cluster.ids <- c(
+  "Naive T",
+  "CD8 T",
+  "NK",
+  "MAIT Tcell",
+  "NK",
+  "Classical Mono",
+  "Tcell",
+  "Bcell",
+  "Naive T",
+  "Non-classical Mono",
+  "Bcell",
+  "Tcell",
+  "gammaDelta T",
+  "Plasma Bcell",
+  "unknown",
+  "unknown")
+
+names(new.cluster.ids) <- levels(Clusters)
+Clusters <- RenameIdents(Clusters, new.cluster.ids)
+
+save(Clusters, file = file.path(datafolder, "Clusters_integrated_mito5.Rdata"))
+```
+
+Processed data saved at:
+`r file.path(datafolder, "Clusters_integrated_mito5.Rdata")`
+
+8. Find All Markers
+
+8.1. Find All Markers in all cells with RNA assay
+```{r}
+Clusters@active.assay <- "RNA"
+
+Clusters.markers <- FindAllMarkers(
+  Clusters,
+  only.pos = TRUE,
+  min.pct = 0.25,
+  logfc.threshold = 0.25)
+
+top10 <- Clusters.markers %>%
+  group_by(cluster) %>%
+  top_n(n = 5, wt = avg_logFC)
+
+DoHeatmap(Clusters, features = top10$gene) + NoLegend()
+```
+
+8.2. Find All Markers in Progressors group
+```{r}
+Clusters_Control <- SubsetData(object = Clusters,  subset.name = "group", accept.value = "Control")
+
+Clusters.markers_Control <- FindAllMarkers(
+  Clusters_Control,
+  only.pos = TRUE,
+  min.pct = 0.25,
+  logfc.threshold = 0.25)
+
+top10 <- Clusters.markers_Control %>% 
+  group_by(cluster) %>%
+  top_n(n = 10, wt = avg_logFC)
+
+DoHeatmap(Clusters_Control, features = top10$gene) + NoLegend()
+```
+
+8.3. Find All Markers in VNPs group
+```{r}
+Clusters_VNP <- SubsetData(object = Clusters,  subset.name = "group", accept.value = "VNP")
+Clusters.markers_VNP <- FindAllMarkers(
+  Clusters_VNP,
+  only.pos = TRUE,
+  min.pct = 0.25,
+  logfc.threshold = 0.25)
+
+top10 <- Clusters.markers_VNP %>% 
+  group_by(cluster) %>%
+  top_n(n = 10, wt = avg_logFC)
+
+DoHeatmap(Clusters_VNP, features = top10$gene) + NoLegend()
+```
+
+8.4. Find All Markers in B cells
+From all cells and conditions
+
+```{r}
+Clusters_Bcells <- SubsetData(object = Clusters,  subset.name = "seurat_clusters", accept.value = c("4", "19", "22"))
+Clusters.markers_Bcells <- FindAllMarkers(
+  Clusters_Bcells,
+  only.pos = TRUE,
+  min.pct = 0.25,
+  logfc.threshold = 0.25)
+
+top10 <- Clusters.markers_Bcells %>% 
+  group_by(cluster) %>%
+  top_n(n = 10, wt = avg_logFC)
+
+DoHeatmap(Clusters_Bcells, features = top10$gene) + NoLegend()
+```
+
+8.5. Find All Markers in all cells with SCT assay
+```{r}
+Clusters@active.assay <- "SCT"
+All.markers_norm <- FindAllMarkers(
+  Clusters,
+  only.pos = TRUE,
+  min.pct = 0.25,
+  logfc.threshold = 0.25)
+
+top10 <- All.markers_norm %>%
+  group_by(cluster) %>%
+  top_n(n = 5, wt = avg_logFC)
+
+DoHeatmap(Clusters, features = top10$gene) + NoLegend()
+
+saveRDS(All.markers_norm, file =  file.path(datafolder, "All.markers_Integration_mito5.rds"))
+```
+
+# Overview example patients
+
+## Progressor C52
+
+```{r}
+Idents(experiment.aggregate_filtered) <- "ID"
+
+C52 <- SubsetData(
+  object = experiment.aggregate_filtered,
+  subset.name = "ID",
+  accept.value = "C52")
+
+pbmc <- SCTransform(C52,
+                    vars.to.regress = "percent.mt",
+                    verbose = FALSE)
+
+# These are now standard steps in the Seurat workflow for visualization and clustering
+pbmc <- RunPCA(
+  pbmc,
+  verbose = FALSE)
+
+pbmc <- RunUMAP(pbmc,
+                dims = 1:30,
+                verbose = FALSE)
+
+pbmc <- FindNeighbors(
+  pbmc,
+  dims = 1:30,
+  verbose = FALSE)
+
+pbmc <- FindClusters(
+  pbmc,
+  verbose = FALSE)
+```
+
+- UMAP
+```{r, fig.height=10, fig.width=10}
+DimPlot(
+  pbmc,
+  reduction = "umap",
+  label = TRUE,
+  pt.size = 0.5) + NoLegend()
+```
+
+- FeaturePlot
+```{r, fig.height=10, fig.width=10}
+target_features = c(
+  "IL7R",
+  "CCR7",
+  "S100A4",
+  "CD8A",
+  "GNLY",
+  "NKG7",
+  "CD14",
+  "LYZ",
+  "MS4A1")
+
+FeaturePlot(
+  pbmc,
+  features = target_features,
+  reduction = "umap")
+```
+
+- Top 10 genes by cluster
+```{r, fig.height=10, fig.width=10}
+Idents(pbmc) <- pbmc$cluster
+
+pbmc.markers <- FindAllMarkers(
+  pbmc,
+  only.pos = TRUE,
+  min.pct = 0.25,
+  logfc.threshold = 0.25)
+
+top10 <- pbmc.markers %>% 
+  group_by(cluster) %>% 
+  top_n(n = 10, wt = avg_logFC)
+
+top10
+
+DoHeatmap(
+  pbmc,
+  features = top10$gene) + NoLegend()
+```
+
+- See the top 10 genes from C52 in the complete dataset
+```{r, fig.height=10, fig.width=10}
+DoHeatmap(
+  Clusters,
+  features = top10$gene,
+  size = 2,
+  angle = 45) + NoLegend()
+```
+
+- UMAP of cell types
+```{r, fig.height=10, fig.width=10}
+new.cluster.ids <- c(
+  "Naive T",
+  "NK",
+  "CD8 T",
+  "NK",
+  "Memory T",
+  "Naive T",
+  "Bcell",
+  "Monocyte",
+  "T cell" ,
+  "Monocyte",
+  "CD8 T",
+  "NK")
+
+names(new.cluster.ids) <- levels(pbmc)
+pbmc <- RenameIdents(pbmc, new.cluster.ids)
+
+DimPlot(
+  pbmc,
+  reduction = "umap",
+  label = TRUE,
+  pt.size = 0.5) + NoLegend()
+```
+
+## VNP V1
+```{r}
+Idents(experiment.aggregate_filtered) <- "ID"
+
+V1 <- SubsetData(
+  object = experiment.aggregate_filtered,
+  subset.name = "ID",
+  accept.value = "V1")
+
+pbmc <- SCTransform(
+  V1,
+  vars.to.regress = "percent.mt",
+  verbose = FALSE)
+
+# These are now standard steps in the Seurat workflow for visualization and clustering
+pbmc <- RunPCA(
+  pbmc,
+  verbose = FALSE)
+
+pbmc <- RunUMAP(
+  pbmc,
+  dims = 1:30,
+  verbose = FALSE)
+
+pbmc <- FindNeighbors(
+  pbmc,
+  dims = 1:30,
+  verbose = FALSE)
+
+pbmc <- FindClusters(
+  pbmc,
+  verbose = FALSE)
+```
+
+- UMAP
+```{r, fig.height=10, fig.width=10}
+DimPlot(
+  pbmc,
+  reduction = "umap",
+  label = TRUE,
+  pt.size = 0.5) + NoLegend()
+```
+
+- FeaturePlot
+```{r, fig.height=10, fig.width=10}
+target_features = c(
+  "IL7R",
+  "CCR7",
+  "S100A4",
+  "CD8A",
+  "GNLY",
+  "NKG7",
+  "CD14",
+  "LYZ",
+  "MS4A1")
+
+FeaturePlot(
+  pbmc,
+  features = target_features,
+  reduction = "umap")
+```
+
+- Top 10 genes by cluster
+```{r, fig.height=10, fig.width=10}
+Idents(pbmc) <- pbmc$cluster
+
+pbmc.markers <- FindAllMarkers(
+  pbmc,
+  only.pos = TRUE,
+  min.pct = 0.25,
+  logfc.threshold = 0.25)
+
+top10 <- pbmc.markers %>%
+  group_by(cluster) %>%
+  top_n(n = 10, wt = avg_logFC)
+top10
+
+DoHeatmap(pbmc, features = top10$gene) + NoLegend()
+```
+
+- See the top 10 genes from C52 in the complete dataset
+```{r, fig.height=10, fig.width=10}
+DoHeatmap(
+  Clusters,
+  features = top10$gene,
+  size = 2,
+  angle = 45) + NoLegend()
+```
+
+- UMAP of cell types
+```{r, fig.height=10, fig.width=10}
+new.cluster.ids <- c(
+  "Naive T",
+  "NK",
+  "CD8 T",
+  "NK",
+  "Memory T",
+  "Naive T",
+  "Bcell",
+  "Monocyte",
+  "T cell" ,
+  "Monocyte",
+  "CD8 T",
+  "NK")
+
+names(new.cluster.ids) <- levels(pbmc)
+pbmc <- RenameIdents(pbmc, new.cluster.ids)
+
+DimPlot(
+  pbmc,
+  reduction = "umap",
+  label = TRUE,
+  pt.size = 0.5) + NoLegend()
+```
