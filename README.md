@@ -1,6 +1,6 @@
 # Scripts for "Host genetic and immune factors drive evasion of HIV-1 pathogenesis in viremic non-progressors"
 
-This repository is complementary to the publication Bayón-Gil A. et al. (in press).
+This repository is complementary to the publication [Bayón-Gil et al. (2024)](https://doi.org/10.1016/j.medj.2024.09.007).
 
 ![Graphical abstract](https://github.com/irsi-grec/2024vnps/assets/140154521/de0ef53a-2dcb-41dd-82d3-7b615816130c)
 
@@ -23,4 +23,5 @@ The authors provided the information and software in good faith. Under no circum
 
 ## Citation
 
-Bayón-Gil A. et al. (in press) Host genetic and immune factors drive evasion of HIV-1 pathogenesis in viremic non-progressors. Accepted for publication in Med journal.
+Bayón-Gil et al., Host genetic and immune factors drive evasion of HIV-1 pathogenesis in viremic non-progressors,
+Med (2024), https://doi.org/10.1016/j.medj.2024.09.007
